@@ -10,7 +10,7 @@
 #define SERIAL_5N1 0x00
 #define SERIAL_6N1 0x02
 #define SERIAL_7N1 0x04
-#define SERIAL_8N1 0x06
+#define SERIAL_8N1 0x06  // Default
 #define SERIAL_5N2 0x08
 #define SERIAL_6N2 0x0A
 #define SERIAL_7N2 0x0C
@@ -60,17 +60,24 @@ typedef struct serial_t
 
 } serial_t;
 
-void serial_construct(serial_t* serial, uint16_t bits_per_second, uint8_t config);
+void serial_construct(serial_t* serial, uint16_t bits_per_second, uint8_t config, bool double_scale);
 void serial_destroy(serial_t* serial);
 void serial_on_empty_interrupt(serial_t* serial);
+void serial_on_receive_interrupt(serial_t* serial);
 
 uint8_t serial_write(serial_t* serial, uint8_t data);
 void serial_flush(serial_t* serial);
+
+bool serial_peek(serial_t* serial);
+uint8_t serial_read(serial_t* serial);
+
+bool serial_read_available(serial_t* serial);
 
 // Macro for setting up a serial channel, creates serial_t* S<channel>
 #define SERIAL_SETUP(channel)\
 serial_t SERIAL##channel = { &UBRR##channel##H, &UBRR##channel##L, &UCSR##channel##A, &UCSR##channel##B, &UCSR##channel##C, &UDR##channel };\
 serial_t* const S##channel = &SERIAL##channel;\
 ISR(USART_UDRE_vect) { serial_on_empty_interrupt(S##channel); }\
+ISR(USART_RX_vect) { serial_on_receive_interrupt(S##channel); }\
 
 #endif  // SERIAL_H

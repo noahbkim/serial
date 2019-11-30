@@ -21,14 +21,15 @@ inline void serial_##name##_disable(serial_t* serial) { *serial->field &= ~(1 <<
 inline uint8_t serial_is_##name##_enabled(serial_t* serial) { return *serial->field & (1 << bit); }
 
 MANAGE_SERIAL_BIT(double_speed, ucsra, U2X0);
-MANAGE_SERIAL_BIT(transmit, ucsrb, TXEN0)
-MANAGE_SERIAL_BIT(receive, ucsrb, RXEN0)
-MANAGE_SERIAL_BIT(interrupt_transmit, ucsrb, TXCIE0)
-MANAGE_SERIAL_BIT(interrupt_receive, ucsrb, RXCIE0)
-MANAGE_SERIAL_BIT(interrupt_empty, ucsrb, UDRIE0)
+MANAGE_SERIAL_BIT(transmit, ucsrb, TXEN0);
+MANAGE_SERIAL_BIT(receive, ucsrb, RXEN0);
+MANAGE_SERIAL_BIT(interrupt_transmit, ucsrb, TXCIE0);
+MANAGE_SERIAL_BIT(interrupt_receive, ucsrb, RXCIE0);
+MANAGE_SERIAL_BIT(interrupt_empty, ucsrb, UDRIE0);
 
 inline uint8_t serial_is_empty(serial_t* serial) { return *serial->ucsra & (1 << UDRE0); }
 inline uint8_t serial_is_transmit_complete(serial_t* serial) { return *serial->ucsra & (1 << TXC0); }
+inline uint8_t serial_is_no_parity_error(serial_t* serial) { return (*serial->ucsra & (1 << UPE0)) == 0; }
 
 inline void serial_set_ubrr(serial_t* serial, uint16_t ubrr)
 {
@@ -36,11 +37,16 @@ inline void serial_set_ubrr(serial_t* serial, uint16_t ubrr)
     *serial->ubrrl = ubrr;
 }
 
-void serial_construct(serial_t* serial, uint16_t bits_per_second, uint8_t config)
+void serial_construct(serial_t* serial, uint16_t bits_per_second, uint8_t config, bool double_scale)
 {
     // Compute transmission rate
-    uint16_t ubrr = F_CPU / SERIAL_MODE_ASYNCHRONOUS_DOUBLE_SCALE / bits_per_second - 1;
-    serial_double_speed_enable(serial);
+    uint8_t scale = double_scale ? SERIAL_MODE_ASYNCHRONOUS_DOUBLE_SCALE : SERIAL_MODE_ASYNCHRONOUS_NORMAL_SCALE;
+    uint16_t ubrr = F_CPU / scale / bits_per_second - 1;
+
+    if (double_scale)
+    {
+        serial_double_speed_enable(serial);
+    }
 
     // If too low or in special case for Uno firmware, no double speed
     if (ubrr > 4095 || bits_per_second == 57600) {
@@ -57,7 +63,7 @@ void serial_construct(serial_t* serial, uint16_t bits_per_second, uint8_t config
     // Set data, parity, and stop bits
     serial_transmit_enable(serial);
     serial_receive_enable(serial);
-    // serial_interrupt_receive_enable(serial);
+    serial_interrupt_receive_enable(serial);
     serial_interrupt_empty_disable(serial);
 }
 
@@ -69,7 +75,7 @@ void serial_destroy(serial_t* serial)
     // Clear flags
     serial_transmit_disable(serial);
     serial_receive_disable(serial);
-    // serial_interrupt_receive_disable(serial);
+    serial_interrupt_receive_disable(serial);
     serial_interrupt_empty_disable(serial);
 }
 
@@ -122,6 +128,19 @@ uint8_t serial_write(serial_t* serial, uint8_t data)
     }
 }
 
+bool serial_read_available(serial_t* serial)
+{
+    return serial->receive_buffer_head != serial->receive_buffer_tail;
+}
+
+// Undefined if peek is false
+uint8_t serial_read(serial_t* serial)
+{
+    uint8_t data = serial->receive_buffer[serial->receive_buffer_tail];
+    serial->receive_buffer_tail = (serial->receive_buffer_tail + 1) % SERIAL_RECEIVE_BUFFER_SIZE;
+    return data;
+}
+
 void serial_on_empty_interrupt(serial_t* serial)
 {
     // Consume byte and advance buffer tail
@@ -135,6 +154,27 @@ void serial_on_empty_interrupt(serial_t* serial)
     if (serial->transmit_buffer_tail == serial->transmit_buffer_head)
     {
         serial_interrupt_empty_disable(serial);
+    }
+}
+
+void serial_on_receive_interrupt(serial_t* serial)
+{
+    if (serial_is_no_parity_error(serial))
+    {
+        uint8_t data = *serial->udr;
+        receive_buffer_index_t next = (serial->receive_buffer_head + 1) % SERIAL_RECEIVE_BUFFER_SIZE;
+        
+        // Ignore character if we're gonna overwrite the buffer
+        if (next != serial->receive_buffer_tail) {
+            serial->receive_buffer[serial->receive_buffer_head] = data;
+            serial->receive_buffer_head = next;
+        }
+    }
+    
+    // Discard byte on parity error
+    else
+    {
+        *serial->udr;
     }
 }
 
